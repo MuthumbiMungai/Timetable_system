@@ -3,12 +3,13 @@ from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QLineEdit, QComboBox, QSpinBox,
     QCheckBox, QFormLayout, QMessageBox, QGroupBox, QHeaderView, QDialog,
-    QListWidget, QListWidgetItem
+    QListWidget, QListWidgetItem, QInputDialog
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 import sqlite3
 from database.db import get_connection
+from datetime import datetime
 
 
 class UnitsWindow(QMainWindow):
@@ -52,26 +53,34 @@ class UnitsWindow(QMainWindow):
         add_group.setLayout(form)
         main_layout.addWidget(add_group)
 
+        # Action Buttons
+        action_layout = QHBoxLayout()
+        btn_refresh = QPushButton("🔄 Refresh")
+        btn_edit = QPushButton("✏️ Edit Selected")
+        btn_delete = QPushButton("🗑️ Delete Selected")
+        btn_summary = QPushButton("📊 View Summary / Log")
+
+        btn_refresh.clicked.connect(self.load_units)
+        btn_edit.clicked.connect(self.edit_unit)
+        btn_delete.clicked.connect(self.delete_unit)
+        btn_summary.clicked.connect(self.show_summary)
+
+        action_layout.addWidget(btn_refresh)
+        action_layout.addWidget(btn_edit)
+        action_layout.addWidget(btn_delete)
+        action_layout.addWidget(btn_summary)
+        action_layout.addStretch()
+        main_layout.addLayout(action_layout)
+
         # Units Table
         self.table = QTableWidget()
         self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(["ID", "Name", "Code", "Department", "Hours"])
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.doubleClicked.connect(self.show_unit_details)
 
         main_layout.addWidget(self.table)
-
-        # Bottom buttons
-        btn_layout = QHBoxLayout()
-        btn_refresh = QPushButton("Refresh")
-        btn_refresh.clicked.connect(self.load_units)
-        btn_delete = QPushButton("Delete Selected Unit")
-        btn_delete.clicked.connect(self.delete_unit)
-
-        btn_layout.addWidget(btn_refresh)
-        btn_layout.addWidget(btn_delete)
-        btn_layout.addStretch()
-        main_layout.addLayout(btn_layout)
 
         self.load_departments()
         self.load_units()
@@ -130,7 +139,7 @@ class UnitsWindow(QMainWindow):
             self.clear_form()
             self.load_units()
         except sqlite3.IntegrityError:
-            QMessageBox.warning(self, "Duplicate", f"Unit code '{code}' already exists.")
+            QMessageBox.warning(self, "Duplicate", f"Unit code '{code}' already exists!")
 
     def clear_form(self):
         self.unit_name.clear()
@@ -138,13 +147,40 @@ class UnitsWindow(QMainWindow):
         self.hours_spin.setValue(2)
         self.shared_check.setChecked(False)
 
-    def show_unit_details(self, index):
-        row = index.row()
-        unit_id = int(self.table.item(row, 0).text())
-        unit_name = self.table.item(row, 1).text()
+    def edit_unit(self):
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "Error", "Please select a unit to edit!")
+            return
 
-        dialog = UnitDetailDialog(unit_id, unit_name, self)
-        dialog.exec_()
+        unit_id = int(self.table.item(row, 0).text())
+        curr_name = self.table.item(row, 1).text()
+        curr_code = self.table.item(row, 2).text()
+        curr_hours = int(self.table.item(row, 4).text())
+
+        new_name, ok = QInputDialog.getText(self, "Edit Unit", "Unit Name:", text=curr_name)
+        if not ok or not new_name.strip(): return
+        new_code, ok = QInputDialog.getText(self, "Edit Unit", "Unit Code:", text=curr_code)
+        if not ok or not new_code.strip(): return
+        new_hours, ok = QInputDialog.getInt(self, "Edit Unit", "Hours per Week:", 
+                                           value=curr_hours, min=1, max=6)
+        if not ok: return
+
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE units SET name=?, code=?, hours_per_week=? 
+                WHERE id=?
+            """, (new_name.strip(), new_code.strip().upper(), new_hours, unit_id))
+            conn.commit()
+            conn.close()
+            QMessageBox.information(self, "Success", "Unit updated successfully!")
+            self.load_units()
+        except sqlite3.IntegrityError:
+            QMessageBox.warning(self, "Error", "Unit code already exists!")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
 
     def delete_unit(self):
         row = self.table.currentRow()
@@ -155,89 +191,66 @@ class UnitsWindow(QMainWindow):
         unit_id = int(self.table.item(row, 0).text())
         code = self.table.item(row, 2).text()
 
-        reply = QMessageBox.question(self, "Delete Unit",
-            f"Delete unit '{code}'?\nThis action cannot be undone.",
-            QMessageBox.Yes | QMessageBox.No)
-
-        if reply == QMessageBox.Yes:
-            try:
-                conn = get_connection()
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM units WHERE id = ?", (unit_id,))
-                conn.commit()
-                conn.close()
-                self.load_units()
-                QMessageBox.information(self, "Deleted", "Unit deleted successfully.")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", str(e))
-
-
-# ====================== Detail Dialog with Intake Assignment ======================
-class UnitDetailDialog(QDialog):
-    def __init__(self, unit_id: int, unit_name: str, parent=None):
-        super().__init__(parent)
-        self.unit_id = unit_id
-        self.setWindowTitle(f"Manage Intakes for: {unit_name}")
-        self.resize(850, 600)
-
-        layout = QVBoxLayout(self)
-
-        layout.addWidget(QLabel(f"<b>Unit:</b> {unit_name}"))
-
-        group = QGroupBox("Assign Unit to Intakes")
-        group_layout = QVBoxLayout()
-
-        self.intake_list = QListWidget()
-        self.load_available_intakes()
-
-        btn_assign = QPushButton("Assign Selected Intakes to this Unit")
-        btn_assign.clicked.connect(self.assign_intakes)
-
-        group_layout.addWidget(self.intake_list)
-        group_layout.addWidget(btn_assign)
-        group.setLayout(group_layout)
-        layout.addWidget(group)
-
-    def load_available_intakes(self):
-        self.intake_list.clear()
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT i.id, c.name AS course_name, i.label, i.student_count
-            FROM intakes i
-            JOIN courses c ON i.course_id = c.id
-            WHERE i.id NOT IN (SELECT intake_id FROM intake_units WHERE unit_id = ?)
-            ORDER BY c.name, i.label
-        """, (self.unit_id,))
-        
-        for iid, course, label, students in cursor.fetchall():
-            text = f"{course} → {label}  ({students} students)"
-            item = QListWidgetItem(text)
-            item.setData(Qt.UserRole, iid)
-            self.intake_list.addItem(item)
+        cursor.execute("SELECT COUNT(*) FROM intake_units WHERE unit_id = ?", (unit_id,))
+        assigned = cursor.fetchone()[0]
         conn.close()
 
-    def assign_intakes(self):
-        selected = self.intake_list.selectedItems()
-        if not selected:
-            QMessageBox.warning(self, "No Selection", "Please select at least one intake.")
+        if assigned > 0:
+            reply = QMessageBox.question(self, "Warning",
+                                         f"Unit '{code}' is assigned to {assigned} intake(s).\n"
+                                         "Continue with deletion?", QMessageBox.Yes | QMessageBox.No)
+            if reply != QMessageBox.Yes:
+                return
+
+        reply = QMessageBox.question(self, "Delete Unit",
+                                     f"Delete unit '{code}'?\nThis cannot be undone.",
+                                     QMessageBox.Yes | QMessageBox.No)
+        if reply != QMessageBox.Yes:
             return
 
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM intake_units WHERE unit_id = ?", (unit_id,))
+            cursor.execute("DELETE FROM units WHERE id = ?", (unit_id,))
+            conn.commit()
+            conn.close()
+            QMessageBox.information(self, "Success", "Unit deleted successfully.")
+            self.load_units()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+
+    def show_summary(self):
         conn = get_connection()
         cursor = conn.cursor()
-        count = 0
+        cursor.execute("SELECT COUNT(*) FROM units"); total = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM intake_units"); assignments = cursor.fetchone()[0]
 
-        for item in selected:
-            intake_id = item.data(Qt.UserRole)
-            try:
-                cursor.execute("INSERT INTO intake_units (intake_id, unit_id) VALUES (?, ?)",
-                             (intake_id, self.unit_id))
-                count += 1
-            except sqlite3.IntegrityError:
-                pass  # already assigned
-
-        conn.commit()
+        cursor.execute("""
+            SELECT d.name, COUNT(u.id)
+            FROM departments d
+            LEFT JOIN units u ON u.department_id = d.id
+            GROUP BY d.id ORDER BY d.name
+        """)
+        breakdown = cursor.fetchall()
         conn.close()
 
-        QMessageBox.information(self, "Success", f"Unit assigned to {count} intake(s).")
-        self.load_available_intakes()
+        text = f"<b>📚 UNITS SUMMARY</b><br>Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}<br><br>"
+        text += f"Total Units: {total}<br>Total Assignments: {assignments}<br><br><b>Department Breakdown:</b><br>"
+        for dept, count in breakdown:
+            text += f"• {dept} → {count} unit(s)<br>"
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Units Summary / Log")
+        msg.setTextFormat(Qt.RichText)
+        msg.setText(text)
+        msg.exec_()
+
+    def show_unit_details(self, index):
+        row = index.row()
+        unit_id = int(self.table.item(row, 0).text())
+        unit_name = self.table.item(row, 1).text()
+        dialog = UnitDetailDialog(unit_id, unit_name, self)
+        dialog.exec_()

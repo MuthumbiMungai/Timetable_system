@@ -2,12 +2,13 @@
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QLineEdit, QComboBox, QFormLayout,
-    QMessageBox, QGroupBox, QHeaderView, QDialog
+    QMessageBox, QGroupBox, QHeaderView, QDialog, QInputDialog
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 import sqlite3
 from database.db import get_connection
+from datetime import datetime
 
 
 class TrainersWindow(QMainWindow):
@@ -52,26 +53,33 @@ class TrainersWindow(QMainWindow):
         add_group.setLayout(add_layout)
         main_layout.addWidget(add_group)
 
+        # Action Buttons
+        action_layout = QHBoxLayout()
+        btn_refresh = QPushButton("🔄 Refresh")
+        btn_edit = QPushButton("✏️ Edit Selected")
+        btn_delete = QPushButton("🗑️ Delete Selected")
+        btn_summary = QPushButton("📊 View Summary / Log")
+
+        btn_refresh.clicked.connect(self.load_trainers)
+        btn_edit.clicked.connect(self.edit_trainer)
+        btn_delete.clicked.connect(self.delete_trainer)
+        btn_summary.clicked.connect(self.show_summary)
+
+        action_layout.addWidget(btn_refresh)
+        action_layout.addWidget(btn_edit)
+        action_layout.addWidget(btn_delete)
+        action_layout.addWidget(btn_summary)
+        action_layout.addStretch()
+        main_layout.addLayout(action_layout)
+
         # Trainers Table
         self.table = QTableWidget()
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["ID", "Full Name", "Department", "Email"])
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table.doubleClicked.connect(self.edit_trainer)
+        self.table.doubleClicked.connect(self.edit_trainer)   # Double-click also edits
         main_layout.addWidget(self.table)
-
-        # Action buttons
-        action_layout = QHBoxLayout()
-        btn_refresh = QPushButton("Refresh")
-        btn_refresh.clicked.connect(self.load_trainers)
-        btn_delete = QPushButton("Delete Selected")
-        btn_delete.clicked.connect(self.delete_trainer)
-
-        action_layout.addWidget(btn_refresh)
-        action_layout.addWidget(btn_delete)
-        action_layout.addStretch()
-        main_layout.addLayout(action_layout)
 
         self.load_trainers()
 
@@ -105,7 +113,7 @@ class TrainersWindow(QMainWindow):
 
     def add_trainer(self):
         name = self.trainer_name.text().strip()
-        email = self.trainer_email.text().strip()
+        email = self.trainer_email.text().strip() or None
         dept_id = self.dept_combo.currentData()
 
         if not name or not dept_id:
@@ -118,19 +126,29 @@ class TrainersWindow(QMainWindow):
             cursor.execute("""
                 INSERT INTO trainers (department_id, full_name, email)
                 VALUES (?, ?, ?)
-            """, (dept_id, name, email if email else None))
+            """, (dept_id, name, email))
             conn.commit()
             conn.close()
 
-            QMessageBox.information(self, "Success", "Trainer added!")
+            QMessageBox.information(self, "Success", "Trainer added successfully!")
             self.trainer_name.clear()
             self.trainer_email.clear()
             self.load_trainers()
         except sqlite3.IntegrityError:
             QMessageBox.warning(self, "Error", "Email already exists!")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
 
-    def edit_trainer(self, index):
-        row = index.row()
+    def edit_trainer(self, index=None):
+        if index is None:  # Called from button
+            row = self.table.currentRow()
+        else:
+            row = index.row()
+
+        if row < 0:
+            QMessageBox.warning(self, "Error", "Please select a trainer to edit!")
+            return
+
         trainer_id = int(self.table.item(row, 0).text())
         current_name = self.table.item(row, 1).text()
         current_email = self.table.item(row, 3).text()
@@ -140,14 +158,28 @@ class TrainersWindow(QMainWindow):
             self.load_trainers()
 
     def delete_trainer(self):
-        selected = self.table.selectedItems()
-        if not selected:
+        row = self.table.currentRow()
+        if row < 0:
             QMessageBox.warning(self, "Warning", "Please select a trainer to delete.")
             return
 
-        row = self.table.currentRow()
         trainer_id = int(self.table.item(row, 0).text())
         name = self.table.item(row, 1).text()
+
+        # Check if trainer is used in timetable
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM timetable_entries WHERE trainer_id = ?", (trainer_id,))
+        count = cursor.fetchone()[0]
+        conn.close()
+
+        if count > 0:
+            reply = QMessageBox.question(self, "Warning",
+                                         f"Trainer '{name}' is assigned to {count} timetable slot(s).\n"
+                                         "Deleting will remove those assignments. Continue?",
+                                         QMessageBox.Yes | QMessageBox.No)
+            if reply != QMessageBox.Yes:
+                return
 
         reply = QMessageBox.question(self, "Confirm Delete",
                                      f"Delete trainer '{name}'?\nThis cannot be undone.",
@@ -158,16 +190,44 @@ class TrainersWindow(QMainWindow):
         try:
             conn = get_connection()
             cursor = conn.cursor()
+            cursor.execute("DELETE FROM timetable_entries WHERE trainer_id = ?", (trainer_id,))
             cursor.execute("DELETE FROM trainers WHERE id = ?", (trainer_id,))
             conn.commit()
             conn.close()
-            QMessageBox.information(self, "Success", "Trainer deleted.")
+            QMessageBox.information(self, "Success", "Trainer deleted successfully.")
             self.load_trainers()
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
 
+    def show_summary(self):
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM trainers")
+        total = cursor.fetchone()[0]
 
-# ====================== Edit Dialog ======================
+        cursor.execute("""
+            SELECT d.name, COUNT(t.id)
+            FROM departments d
+            LEFT JOIN trainers t ON t.department_id = d.id
+            GROUP BY d.id, d.name
+            ORDER BY d.name
+        """)
+        breakdown = cursor.fetchall()
+        conn.close()
+
+        text = f"<b>👨‍🏫 TRAINERS SUMMARY</b><br>Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}<br><br>"
+        text += f"Total Trainers: {total}<br><br><b>Department Breakdown:</b><br>"
+        for dept, count in breakdown:
+            text += f"• {dept} → {count} trainer(s)<br>"
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Trainers Summary / Log")
+        msg.setTextFormat(Qt.RichText)
+        msg.setText(text)
+        msg.exec_()
+
+
+# ====================== Edit Trainer Dialog ======================
 class EditTrainerDialog(QDialog):
     def __init__(self, trainer_id: int, current_name: str, current_email: str, parent=None):
         super().__init__(parent)
@@ -180,7 +240,7 @@ class EditTrainerDialog(QDialog):
 
         form = QFormLayout()
         self.name_edit = QLineEdit(current_name)
-        self.email_edit = QLineEdit(current_email)
+        self.email_edit = QLineEdit(current_email or "")
 
         form.addRow("Full Name:", self.name_edit)
         form.addRow("Email:", self.email_edit)
@@ -207,11 +267,8 @@ class EditTrainerDialog(QDialog):
         try:
             conn = get_connection()
             cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE trainers 
-                SET full_name = ?, email = ?
-                WHERE id = ?
-            """, (name, email, self.trainer_id))
+            cursor.execute("UPDATE trainers SET full_name = ?, email = ? WHERE id = ?",
+                           (name, email, self.trainer_id))
             conn.commit()
             conn.close()
             self.accept()

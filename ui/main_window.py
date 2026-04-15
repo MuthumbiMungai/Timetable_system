@@ -11,6 +11,7 @@ from ui.departments_window import DepartmentsWindow
 from ui.trainers_window import TrainersWindow
 from ui.units_window import UnitsWindow
 from ui.timetable_window import TimetableWindow
+# We'll create intakes_window next
 
 
 class MainWindow(QMainWindow):
@@ -67,7 +68,6 @@ class MainWindow(QMainWindow):
         for btn in buttons:
             btn.setMinimumHeight(75)
             btn.setFont(QFont("Segoe UI", 11))
-            # Hover-friendly style
             btn.setStyleSheet("""
                 QPushButton {
                     padding: 12px;
@@ -85,42 +85,34 @@ class MainWindow(QMainWindow):
         main_layout.addStretch(1)
 
         # Status bar
-        self.statusBar().showMessage("Ready • Database loaded successfully")
+        self.statusBar().showMessage("Ready • All management features enabled")
 
         # Button connections
         self.btn_departments.clicked.connect(self.open_departments)
         self.btn_trainers.clicked.connect(self.open_trainers)
         self.btn_units.clicked.connect(self.open_units)
-        self.btn_intakes.clicked.connect(lambda: self.show_message("Intakes"))
+        self.btn_intakes.clicked.connect(self.open_intakes)
         self.btn_timetable.clicked.connect(self.open_timetable)
 
     # ==================== Window Openers ====================
 
     def open_departments(self):
-        """Open Departments Management"""
         self.dept_window = DepartmentsWindow()
         self.dept_window.show()
 
     def open_trainers(self):
-        """Open Trainers Management"""
         self.trainer_window = TrainersWindow()
         self.trainer_window.show()
 
     def open_units(self):
-        """Open Units Management"""
         self.units_window = UnitsWindow()
         self.units_window.show()
 
+    def open_intakes(self):
+        """New dedicated Intakes window"""
+        self.intake_window = IntakesWindow()   # Defined in intakes_window.py
+        self.intake_window.show()
+
     def open_timetable(self):
-        """Open Weekly Timetable Grid"""
         self.timetable_window = TimetableWindow()
         self.timetable_window.show()
-
-    def show_message(self, module_name: str):
-        """Placeholder for modules not yet implemented"""
-        QMessageBox.information(
-            self,
-            f"{module_name} Module",
-            f"The {module_name} management screen is coming soon.\n\n"
-            "All database tables are ready."
-        )
