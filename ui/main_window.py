@@ -1,118 +1,96 @@
-# ui/main_window.py
 from PyQt5.QtWidgets import (
-    QMainWindow, QLabel, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QMessageBox
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
+    QLabel, QMessageBox, QTabWidget, QInputDialog
 )
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
 
-# Import all management windows
 from ui.departments_window import DepartmentsWindow
 from ui.trainers_window import TrainersWindow
 from ui.units_window import UnitsWindow
 from ui.timetable_window import TimetableWindow
-# We'll create intakes_window next
+
+
+class PlaceholderWindow(QWidget):
+    def __init__(self, title="Coming Soon"):
+        super().__init__()
+        self.setWindowTitle(title)
+        layout = QVBoxLayout()
+        label = QLabel(f"<h2>{title}</h2><p>This section is under development.</p>")
+        label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(label)
+        self.setLayout(layout)
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        
-        self.setWindowTitle("Timetable Management System")
-        self.resize(1150, 720)
-        self.setMinimumSize(1050, 650)
+        self.setWindowTitle("College Timetable System - Live from Google Sheets")
+        self.setGeometry(100, 100, 1300, 850)
 
-        # Central widget
         central = QWidget()
         self.setCentralWidget(central)
-        
-        main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(50, 50, 50, 50)
-        main_layout.setSpacing(25)
-        central.setLayout(main_layout)
+        layout = QVBoxLayout(central)
 
-        # Title
-        title = QLabel("📅 Timetable Management System")
-        title.setFont(QFont("Segoe UI", 26, QFont.Bold))
-        title.setAlignment(Qt.AlignCenter)
-        main_layout.addWidget(title)
+        header = QLabel("🎓 TIMETABLE MANAGEMENT SYSTEM")
+        header.setStyleSheet("font-size: 20px; font-weight: bold; padding: 15px; background: #2c3e50; color: white;")
+        header.setAlignment(Qt.AlignCenter)
+        layout.addWidget(header)
 
-        # Welcome message
-        welcome = QLabel(
-            "✅ Database initialized successfully!\n\n"
-            "Welcome to the Timetable System.\n"
-            "Choose an action below to get started."
-        )
-        welcome.setFont(QFont("Segoe UI", 13))
-        welcome.setAlignment(Qt.AlignCenter)
-        welcome.setWordWrap(True)
-        main_layout.addWidget(welcome)
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs)
 
-        main_layout.addSpacing(20)
+        self.tabs.addTab(DepartmentsWindow(), "Departments & Courses")
+        self.tabs.addTab(TrainersWindow(), "Trainers")
+        self.tabs.addTab(UnitsWindow(), "Units / Subjects")
+        self.tabs.addTab(TimetableWindow(), "Timetable")
+        self.tabs.addTab(PlaceholderWindow("Intakes"), "Intakes")
+        self.tabs.addTab(PlaceholderWindow("Reports"), "Reports")
 
-        # Buttons in a horizontal row
+        # Bottom Action Buttons
         btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(18)
 
-        self.btn_departments = QPushButton("🏢 Manage Departments")
-        self.btn_trainers    = QPushButton("👨‍🏫 Manage Trainers")
-        self.btn_units       = QPushButton("📚 Manage Units")
-        self.btn_intakes     = QPushButton("👥 Manage Intakes")
-        self.btn_timetable   = QPushButton("🗓️ View / Generate Timetable")
+        sync_btn = QPushButton("🔄 Sync Latest Data from Google Sheets")
+        sync_btn.setStyleSheet("background: #27ae60; color: white; font-weight: bold; padding: 10px;")
+        sync_btn.clicked.connect(self.sync_google_sheets)
+        btn_layout.addWidget(sync_btn)
 
-        buttons = [
-            self.btn_departments, self.btn_trainers, self.btn_units,
-            self.btn_intakes, self.btn_timetable
-        ]
+        export_btn = QPushButton("📄 Export Timetable to Word")
+        export_btn.clicked.connect(self.export_to_word)
+        btn_layout.addWidget(export_btn)
 
-        for btn in buttons:
-            btn.setMinimumHeight(75)
-            btn.setFont(QFont("Segoe UI", 11))
-            btn.setStyleSheet("""
-                QPushButton {
-                    padding: 12px;
-                    border: 2px solid #0078d4;
-                    border-radius: 8px;
-                    background-color: #f0f8ff;
-                }
-                QPushButton:hover {
-                    background-color: #d1e7ff;
-                }
-            """)
-            btn_layout.addWidget(btn)
+        refresh_btn = QPushButton("Refresh Views")
+        refresh_btn.clicked.connect(self.refresh_views)
+        btn_layout.addWidget(refresh_btn)
 
-        main_layout.addLayout(btn_layout)
-        main_layout.addStretch(1)
+        layout.addLayout(btn_layout)
 
-        # Status bar
-        self.statusBar().showMessage("Ready • All management features enabled")
+    def sync_google_sheets(self):
+        try:
+            from database.db import sync_from_google_sheets
+            success = sync_from_google_sheets()
+            if success:
+                QMessageBox.information(self, "Success", 
+                    "Data successfully synced from Google Sheets!\n\n"
+                    "Departments, Courses, Intakes & Trainers are now up to date.")
+                self.refresh_views()
+            else:
+                QMessageBox.warning(self, "Sync Incomplete", "Some data could not be synced.")
+        except Exception as e:
+            QMessageBox.critical(self, "Sync Error", f"Failed to sync:\n{str(e)}")
 
-        # Button connections
-        self.btn_departments.clicked.connect(self.open_departments)
-        self.btn_trainers.clicked.connect(self.open_trainers)
-        self.btn_units.clicked.connect(self.open_units)
-        self.btn_intakes.clicked.connect(self.open_intakes)
-        self.btn_timetable.clicked.connect(self.open_timetable)
+    def export_to_word(self):
+        dept_code, ok = QInputDialog.getText(self, "Export", "Enter Department Code (e.g. APPLIED):")
+        if ok and dept_code.strip():
+            try:
+                from services.export_to_word import export_department_timetable
+                export_department_timetable(dept_code.strip().upper())
+                QMessageBox.information(self, "Exported", f"Timetable exported for {dept_code.upper()}")
+            except Exception as e:
+                QMessageBox.critical(self, "Export Error", str(e))
 
-    # ==================== Window Openers ====================
+    def refresh_views(self):
+        # You can add refresh logic for each tab later
+        QMessageBox.information(self, "Refresh", "Views refreshed (full refresh coming soon).")
 
-    def open_departments(self):
-        self.dept_window = DepartmentsWindow()
-        self.dept_window.show()
 
-    def open_trainers(self):
-        self.trainer_window = TrainersWindow()
-        self.trainer_window.show()
-
-    def open_units(self):
-        self.units_window = UnitsWindow()
-        self.units_window.show()
-
-    def open_intakes(self):
-        """New dedicated Intakes window"""
-        self.intake_window = IntakesWindow()   # Defined in intakes_window.py
-        self.intake_window.show()
-
-    def open_timetable(self):
-        self.timetable_window = TimetableWindow()
-        self.timetable_window.show()
+from PyQt5.QtWidgets import QInputDialog

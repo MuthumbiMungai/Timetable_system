@@ -1,13 +1,24 @@
 import sys
 from PyQt5.QtWidgets import QApplication
+
+from database.db import init_db, sync_from_google_sheets
 from ui.main_window import MainWindow
-from database.db import initialize_database
 
 
 def main():
-    initialize_database()
+    init_db()
+
+    print("🔄 Syncing latest data from Google Sheets...")
+    success = sync_from_google_sheets()
+
+    if success:
+        print("✅ Google Sheets sync completed successfully!")
+    else:
+        print("⚠️ Sync failed - check your internet or Google Sheet sharing.")
+
     app = QApplication(sys.argv)
-    app.setStyle("Fusion")        # Helps with consistent look on Windows
+    app.setStyle("Fusion")
+
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
